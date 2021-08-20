@@ -116,10 +116,12 @@ export function getDataPath(id, dataIndex) {
 }
 
 export function isObjType(schema) {
-  return schema && schema.type === 'object' && schema.properties;
+  return (
+    schema && schema.type === 'object' && schema.properties && !schema.widget
+  );
 }
 
-// TODO: 支持非对象类型数组项
+// TODO: to support case that item is not an object
 export function isListType(schema) {
   return (
     schema &&
@@ -129,12 +131,12 @@ export function isListType(schema) {
   );
 }
 
-// TODO: 检验是否丢进去各种schema都能兜底不会crash
+// TODO: more tests to make sure weird & wrong schema won't crush
 export function flattenSchema(_schema = {}, name = '#', parent, result = {}) {
-  const schema = clone(_schema); // TODO: 是否需要deepClone，这个花费是不是有点大
+  const schema = clone(_schema);
   let _name = name;
   if (!schema.$id) {
-    schema.$id = _name; // 给生成的schema添加一个唯一标识，方便从schema中直接读取
+    schema.$id = _name; // path as $id, for easy access to path in schema
   }
   const children = [];
   if (isObjType(schema)) {
@@ -144,7 +146,7 @@ export function flattenSchema(_schema = {}, name = '#', parent, result = {}) {
       children.push(uniqueName);
       flattenSchema(value, uniqueName, _name, result);
     });
-    // schema.properties = {};
+    schema.properties = {};
   }
   if (isListType(schema)) {
     Object.entries(schema.items.properties).forEach(([key, value]) => {
@@ -153,20 +155,37 @@ export function flattenSchema(_schema = {}, name = '#', parent, result = {}) {
       children.push(uniqueName);
       flattenSchema(value, uniqueName, _name, result);
     });
-    // schema.items.properties = {};
-  }
-
-  const rules = Array.isArray(schema.rules) ? [...schema.rules] : [];
-  if (['boolean', 'function', 'string'].indexOf(typeof schema.required) > -1) {
-    rules.push({ required: schema.required }); // TODO: 万一内部已经用重复的required规则？
+    schema.items.properties = {};
   }
 
   if (schema.type) {
-    // Check: 为啥一定要有type？
     // TODO: 没有想好 validation 的部分
-    result[_name] = { parent, schema: schema, children, rules };
+    result[_name] = { parent, schema, children };
   }
   return result;
+}
+// the reverse of flattenSchema
+export function getSchemaFromFlatten(flatten, path = '#') {
+  let schema = {};
+  const item = clone(flatten[path]);
+  if (item) {
+    schema = item.schema;
+    // remove $id, maybe leave it for now
+    // schema.$id && delete schema.$id;
+    if (item.children.length > 0) {
+      item.children.forEach(child => {
+        if (!flatten[child]) return;
+        const key = getKeyFromPath(child);
+        if (isObjType(schema)) {
+          schema.properties[key] = getSchemaFromFlatten(flatten, child);
+        }
+        if (isListType(schema)) {
+          schema.items.properties[key] = getSchemaFromFlatten(flatten, child);
+        }
+      });
+    }
+  }
+  return schema;
 }
 
 //////////   old
@@ -398,14 +417,9 @@ export function isExpression(func) {
   if (typeof func !== 'string') return false;
   // 这样的pattern {{.....}}
   const pattern = /^{{(.+)}}$/;
-  const reg1 = /^{{(function.+)}}$/;
-  const reg2 = /^{{(.+=>.+)}}$/;
-  if (
-    typeof func === 'string' &&
-    func.match(pattern) &&
-    !func.match(reg1) &&
-    !func.match(reg2)
-  ) {
+  const reg1 = /^{{function\(.+}}$/;
+  // const reg2 = /^{{(.+=>.+)}}$/;
+  if (typeof func === 'string' && func.match(pattern) && !func.match(reg1)) {
     return true;
   }
   return false;
@@ -425,7 +439,7 @@ export function parseSingleExpression(func, formData = {}, dataPath) {
       return Function(str)();
     } catch (error) {
       console.log(error, func, dataPath);
-      return func;
+      return null; // 如果计算有错误，return null 最合适
     }
     // const funcBody = func.substring(2, func.length - 2);
     // //TODO: 这样有问题，例如 a.b.indexOf(), 会把 a.b.indexOf 当做值
@@ -448,30 +462,20 @@ export function parseSingleExpression(func, formData = {}, dataPath) {
   } else return func;
 }
 
-export const schemaContainsExpression = (schema, shallow = true) => {
+export const schemaContainsExpression = schema => {
   if (isObject(schema)) {
     return Object.keys(schema).some(key => {
       const value = schema[key];
       if (typeof value === 'string') {
         return isExpression(value);
-      } else if (
-        typeof key === 'string' &&
-        key.toLowerCase().indexOf('props') > -1
-      ) {
-        const propsObj = schema[key];
-        if (isObject(propsObj)) {
-          return Object.keys(propsObj).some(k => {
-            return isExpression(propsObj[k]);
-          });
-        }
-      } else if (!shallow && isObject(value)) {
-        return schemaContainsExpression(value, false);
+      } else if (isObject(value)) {
+        return schemaContainsExpression(value);
+      } else {
+        return false;
       }
-      return false;
     });
-  } else {
-    return false;
   }
+  return false;
 };
 
 // TODO: 两个优化，1. 可以通过表达式的path来判断，避免一些重复计算
@@ -561,31 +565,42 @@ export function looseJsonParse(obj) {
   return Function('"use strict";return (' + obj + ')')();
 }
 
-// 获得propsSchema的children
-function getChildren2(schema) {
-  if (!schema) return [];
-  const {
-    // object
-    properties,
-    // array
-    items,
-    type,
-  } = schema;
-  if (!properties && !items) {
-    return [];
+export const isFunctionString = fString => {
+  return typeof fString === 'string' && fString.indexOf('function(') === 0;
+};
+
+export function parseFunction(fString) {
+  if (isFunctionString(fString)) {
+    return Function('return ' + fString)();
   }
-  let schemaSubs = {};
-  if (type === 'object') {
-    schemaSubs = properties;
-  }
-  if (type === 'array') {
-    schemaSubs = items.properties;
-  }
-  return Object.keys(schemaSubs).map(name => ({
-    schema: schemaSubs[name],
-    name,
-  }));
+  return fString;
 }
+
+// 获得propsSchema的children
+// function getChildren2(schema) {
+//   if (!schema) return [];
+//   const {
+//     // object
+//     properties,
+//     // array
+//     items,
+//     type,
+//   } = schema;
+//   if (!properties && !items) {
+//     return [];
+//   }
+//   let schemaSubs = {};
+//   if (type === 'object') {
+//     schemaSubs = properties;
+//   }
+//   if (type === 'array') {
+//     schemaSubs = items.properties;
+//   }
+//   return Object.keys(schemaSubs).map(name => ({
+//     schema: schemaSubs[name],
+//     name,
+//   }));
+// }
 
 export const oldSchemaToNew = schema => {
   if (schema && schema.propsSchema) {
@@ -633,11 +648,12 @@ export function defaultGetValueFromEvent(valuePropName, ...args) {
   return event;
 }
 
-export const getKeyFromPath = path => {
+export const getKeyFromPath = (path = '#') => {
   try {
-    const keyList = path.split('.');
-    const last = keyList.slice(-1)[0];
-    return last;
+    const arr = path.split('.');
+    const last = arr.slice(-1)[0];
+    const result = last.replace('[]', '');
+    return result;
   } catch (error) {
     console.error(error, 'getKeyFromPath');
     return '';
@@ -745,27 +761,32 @@ export const getDescriptorFromSchema = ({ schema, isRequired = true }) => {
 
     switch (schema.type) {
       case 'range':
-        const rangeValidator = {
-          validator: (rule, value) => {
-            if (!value) return true;
-            if (Array.isArray(value)) {
-              // range组件点击clear，会变成 ['','']
-              // range组件对应的值bind的时候，会变成 [null,null]
-              const validValue =
-                typeof value[0] === 'string' && typeof value[1] === 'string';
-              const validValue2 =
-                value[0] === undefined && value[1] === undefined;
-              if (validValue || validValue2) {
-                return true;
-              }
-              return false;
-            }
-            return false;
-          },
-          type: 'array',
-          message: '${title}必填',
-        };
-        singleResult = rangeValidator;
+        // 暂时先去掉，应该没事了，在range组件的源头上把奇怪的case干掉了
+        // const rangeValidator = {
+        //   validator: (rule, value) => {
+        //     const rangeRequired = schema.required === true && isRequired;
+        //     // range组件点击clear，会变成 ['','']
+        //     // range组件对应的值bind的时候，会变成 [undefined,undefined]
+        //     const notValid1 = value[0] === '' && value[1] === '';
+        //     const notValid2 = value[0] === undefined && value[1] === undefined;
+        //     if (rangeRequired) {
+        //       if (!value) return false;
+        //       if (Array.isArray(value)) {
+        //         if (notValid1 || notValid2) {
+        //           return false;
+        //         }
+        //         return true;
+        //       }
+        //       return true;
+        //     } else {
+        //       return true;
+        //     }
+        //   },
+        //   type: 'array',
+        //   message: '${title}必填',
+        // };
+        // singleResult = rangeValidator;
+        singleResult.type = 'array';
         break;
       case 'html':
         singleResult.type = 'string';
@@ -906,10 +927,9 @@ export const isPathRequired = (path, schema) => {
 };
 
 // _path 只供内部递归使用
-export const generateDataSkeleton = (schema, formData, _path = '') => {
-  let result = {};
+export const generateDataSkeleton = (schema, formData) => {
   let _formData = clone(formData);
-  result = _formData;
+  let result = _formData;
   if (isObjType(schema)) {
     if (_formData === undefined || typeof _formData !== 'object') {
       _formData = {};
@@ -918,11 +938,7 @@ export const generateDataSkeleton = (schema, formData, _path = '') => {
     Object.keys(schema.properties).forEach(key => {
       const childSchema = schema.properties[key];
       const childData = _formData[key];
-      const childResult = generateDataSkeleton(
-        childSchema,
-        childData,
-        `${_path}.${key}`
-      );
+      const childResult = generateDataSkeleton(childSchema, childData);
       result[key] = childResult;
     });
   } else if (_formData !== undefined) {
@@ -930,7 +946,7 @@ export const generateDataSkeleton = (schema, formData, _path = '') => {
   } else {
     if (schema.default !== undefined) {
       result = clone(schema.default);
-    } else if (schema.type === 'boolean') {
+    } else if (schema.type === 'boolean' && !schema.widget) {
       // result = false;
       result = undefined;
     } else {
@@ -1113,12 +1129,6 @@ const updateSingleSchema = schema => {
   }
 };
 
-// 旧版schema转新版schema
-export const parseExpression = (schema, formData) => {
-  let schema1 = parseRootValue(schema);
-  let schema2 = replaceParseValue(schema1);
-};
-
 // 检验一个string是 function（传统活箭头函数）
 export const parseFunctionString = string => {
   if (typeof string !== 'string') return false;
@@ -1171,3 +1181,26 @@ export const removeHiddenFromResult = (data, flatten) => {
   });
   return data;
 };
+
+export function msToTime(duration) {
+  let seconds = Math.floor((duration / 1000) % 60);
+  let minutes = Math.floor((duration / (1000 * 60)) % 60);
+  let hours = Math.floor((duration / (1000 * 60 * 60)) % 24);
+
+  hours = hours < 10 ? '0' + hours : hours;
+  minutes = minutes < 10 ? '0' + minutes : minutes;
+  seconds = seconds < 10 ? '0' + seconds : seconds;
+  return hours + ':' + minutes + ':' + seconds;
+}
+
+export function yymmdd(timeStamp) {
+  const date_ob = new Date(Number(timeStamp));
+  const adjustZero = num => ('0' + num).slice(-2);
+  let day = adjustZero(date_ob.getDate());
+  let month = adjustZero(date_ob.getMonth());
+  let year = date_ob.getFullYear();
+  let hours = adjustZero(date_ob.getHours());
+  let minutes = adjustZero(date_ob.getMinutes());
+  let seconds = adjustZero(date_ob.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
