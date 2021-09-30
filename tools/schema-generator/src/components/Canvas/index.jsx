@@ -111,8 +111,9 @@ const Canvas = ({ onSelect }) => {
           </Button>
         )}
         {_extraBtns.map((item, idx) => {
+          const { onClick, ...rest } = item;
           return (
-            <Button key={idx.toString()} className="mr2" {...item}>
+            <Button key={idx.toString()} className="mr2" {...rest} onClick={() => { onClick(displaySchema) }} >
               {item.text || item.children}
             </Button>
           );
