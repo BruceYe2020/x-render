@@ -48,3 +48,4 @@ node_modules
 old-doc
 test.json
 /docs/guide/.test
+/tools/schema-generator/.npmrc

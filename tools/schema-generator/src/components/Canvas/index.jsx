@@ -36,14 +36,14 @@ const Canvas = () => {
       }));
     } catch (error) {
       console.log('catch', error)
-      message.info('格式不对哦，请重新尝试'); // 可以加个格式哪里不对的提示
+      message.info('Incorrect format'); // 可以加个格式哪里不对的提示
     }
     toggleModal2();
   };
 
   const copySchema = () => {
     copyTOClipboard(displaySchemaString);
-    message.info('复制成功');
+    message.info('Copy success');
     toggleModal();
   };
 
@@ -75,22 +75,22 @@ const Canvas = () => {
               setGlobal({ selected: '#' });
             }}
           >
-            {preview ? '开始编辑' : '最终展示'}
+            {preview ? 'Edit' : 'Preview'}
           </Button>
         )}
         {_showDefaultBtns[1] !== false && (
           <Button className="mr2" onClick={clearSchema}>
-            清空
+            Clear
           </Button>
         )}
         {_showDefaultBtns[2] !== false && (
           <Button className="mr2" onClick={toggleModal2}>
-            导入
+            Import schema
           </Button>
         )}
         {_showDefaultBtns[3] !== false && (
           <Button type="primary" className="mr2" onClick={toggleModal}>
-            导出schema
+            Export schema
           </Button>
         )}
         {_extraBtns.map((item, idx) => {
@@ -109,8 +109,8 @@ const Canvas = () => {
         visible={local.showModal}
         onOk={copySchema}
         onCancel={toggleModal}
-        okText="复制"
-        cancelText="取消"
+        okText="Copy"
+        cancelText="Cancel"
       >
         <div className="mt3">
           <TextArea
@@ -122,8 +122,8 @@ const Canvas = () => {
       </Modal>
       <Modal
         visible={local.showModal2}
-        okText="导入"
-        cancelText="取消"
+        okText="Import"
+        cancelText="Cancel"
         onOk={importSchema}
         onCancel={toggleModal2}
       >
@@ -131,7 +131,7 @@ const Canvas = () => {
           <TextArea
             style={{ fontSize: 12 }}
             value={local.schemaForImport}
-            placeholder="贴入需要导入的schema，模样可点击导出schema参考"
+            placeholder="Paste schema here"
             onChange={onTextareaChange}
             autoSize={{ minRows: 10, maxRows: 30 }}
           />

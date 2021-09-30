@@ -1,5 +1,5 @@
 {
-  "name": "fr-generator",
+  "name": "@bruceye/fr-generator-medisys",
   "version": "2.7.0",
   "scripts": {
     "build": "father-build",
